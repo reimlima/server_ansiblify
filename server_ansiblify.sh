@@ -1013,10 +1013,47 @@ if [ "$GENERATE_CONFIG" = true ]; then
                 export_custom_scripts && process_commands && add_role commands
                 ;;
             services)
-                export_systemd_units && process_services_playbook && add_role services
+                # Run export functions independently and collect errors
+                export_errors=()
+                
+                echo "  Exporting systemd units..."
+                export_systemd_units || export_errors+=("systemd_units")
+                
+                # Report any export errors
+                if [ ${#export_errors[@]} -gt 0 ]; then
+                    echo "  Warning: Some exports failed: ${export_errors[*]}"
+                fi
+                
+                process_services_playbook && add_role services
                 ;;
             system)
-                export_system_files && export_cron_configs && export_snmp_configs && export_rsync_configs && export_motd_configs && export_ntp_configs && process_system && add_role system
+                # Run all export functions independently and collect errors
+                export_errors=()
+                
+                echo "  Exporting system files..."
+                export_system_files || export_errors+=("system_files")
+                
+                echo "  Exporting cron configurations..."
+                export_cron_configs || export_errors+=("cron_configs")
+                
+                echo "  Exporting SNMP configurations..."
+                export_snmp_configs || export_errors+=("snmp_configs")
+                
+                echo "  Exporting rsync configurations..."
+                export_rsync_configs || export_errors+=("rsync_configs")
+                
+                echo "  Exporting MOTD configurations..."
+                export_motd_configs || export_errors+=("motd_configs")
+                
+                echo "  Exporting NTP configurations..."
+                export_ntp_configs || export_errors+=("ntp_configs")
+                
+                # Report any export errors
+                if [ ${#export_errors[@]} -gt 0 ]; then
+                    echo "  Warning: Some exports failed: ${export_errors[*]}"
+                fi
+                
+                process_system && add_role system
                 ;;
             vm)
                 process_vm && add_role vm
