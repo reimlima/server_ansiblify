@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.1.1](https://github.com/reimlima/server_ansiblify/compare/v1.1.0...v1.1.1) (2025-07-02)
+
+
+### Bug Fixes
+
+* fixing inventory poiting to localhost ([631525b](https://github.com/reimlima/server_ansiblify/commit/631525b1264c82c9106e04fee5c3fa87e3fddbf9))
+
 ## [1.1.0](https://github.com/reimlima/server_ansiblify/compare/v1.0.0...v1.1.0) (2025-07-02)
 
 
