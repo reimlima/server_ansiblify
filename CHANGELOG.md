@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.1.2](https://github.com/reimlima/server_ansiblify/compare/v1.1.1...v1.1.2) (2025-07-02)
+
+
+### Bug Fixes
+
+* fixing system exports silent exit ([cd30c8b](https://github.com/reimlima/server_ansiblify/commit/cd30c8b972e8278c7fa9c7ba7112a238240fece7))
+
 ### [1.1.1](https://github.com/reimlima/server_ansiblify/compare/v1.1.0...v1.1.1) (2025-07-02)
 
 
