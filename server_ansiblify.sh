@@ -406,24 +406,29 @@ EOF
 process_system() {
     create_role "system"
     local tasks_file="$ROLES_DIR/system/tasks/main.yml"
-    
     cat > "$tasks_file" << 'EOF'
 ---
-- name: Configure hosts file
+- name: Copy all exported system files
   ansible.builtin.copy:
-    content: "{{ lookup('ansible.builtin.file', '/etc/hosts') }}"
-    dest: /etc/hosts
-    mode: '0644'
+    src: "{{ item }}"
+    dest: "/etc/{{ item | basename }}"
     owner: root
     group: root
+    mode: '0644'
+  with_fileglob:
+    - "{{ role_path }}/files/*"
+  ignore_errors: true
 
-- name: Configure fstab file
+- name: Copy all exported system directories
   ansible.builtin.copy:
-    content: "{{ lookup('ansible.builtin.file', '/etc/fstab') }}"
-    dest: /etc/fstab
-    mode: '0644'
+    src: "{{ item }}"
+    dest: "/etc/{{ item | basename }}"
     owner: root
     group: root
+    mode: '0755'
+  with_fileglob:
+    - "{{ role_path }}/files/*/"
+  ignore_errors: true
 EOF
 }
 
@@ -623,6 +628,95 @@ collect_facts: true
 EOF
 }
 
+# Generate dotfiles role tasks/main.yml
+process_dotfiles() {
+    local tasks_file="$ROLES_DIR/dotfiles/tasks/main.yml"
+    mkdir -p "$(dirname "$tasks_file")"
+    cat > "$tasks_file" << 'EOF'
+---
+- name: Get exported dotfile user directories
+  ansible.builtin.find:
+    paths: "{{ role_path }}/files"
+    file_type: directory
+    depth: 1
+  register: dotfile_user_dirs
+
+- name: Copy dotfiles for each user
+  ansible.builtin.copy:
+    src: "{{ item.1 }}"
+    dest: "/home/{{ item.0 }}/{{ item.1 | basename }}"
+    owner: "{{ item.0 }}"
+    group: "{{ item.0 }}"
+    mode: preserve
+  with_subelements:
+    - "{{ dotfile_user_dirs.files | map(attribute='path') | map('basename') | list }}"
+    - "{{ lookup('fileglob', role_path + '/files/' + item + '/.*', wantlist=True) }}"
+  loop_control:
+    label: "{{ item.0 }}/{{ item.1 | basename }}"
+EOF
+}
+
+# Generate completions role tasks/main.yml
+process_completions() {
+    local tasks_file="$ROLES_DIR/completions/tasks/main.yml"
+    mkdir -p "$(dirname "$tasks_file")"
+    cat > "$tasks_file" << 'EOF'
+---
+- name: Copy completions to /etc/bash_completion.d
+  ansible.builtin.copy:
+    src: "etc_bash_completion.d/{{ item | basename }}"
+    dest: "/etc/bash_completion.d/{{ item | basename }}"
+    owner: root
+    group: root
+    mode: '0644'
+  with_fileglob:
+    - "{{ role_path }}/files/etc_bash_completion.d/*"
+  ignore_errors: true
+
+- name: Copy completions to /usr/share/bash-completion/completions
+  ansible.builtin.copy:
+    src: "usr_share_bash_completion_completions/{{ item | basename }}"
+    dest: "/usr/share/bash-completion/completions/{{ item | basename }}"
+    owner: root
+    group: root
+    mode: '0644'
+  with_fileglob:
+    - "{{ role_path }}/files/usr_share_bash_completion_completions/*"
+  ignore_errors: true
+EOF
+}
+
+# Update services role tasks/main.yml to handle systemd units and enablement
+process_services_playbook() {
+    local tasks_file="$ROLES_DIR/services/tasks/main.yml"
+    mkdir -p "$(dirname "$tasks_file")"
+    cat > "$tasks_file" << 'EOF'
+---
+- name: Copy custom systemd unit files
+  ansible.builtin.copy:
+    src: "systemd/{{ item | basename }}"
+    dest: "/etc/systemd/system/{{ item | basename }}"
+    owner: root
+    group: root
+    mode: '0644'
+  with_fileglob:
+    - "{{ role_path }}/files/systemd/*.service"
+  register: systemd_unit_copy
+
+- name: Reload systemd if unit files changed
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: systemd_unit_copy is changed
+
+- name: Enable exported systemd services
+  ansible.builtin.systemd:
+    name: "{{ item | basename }}"
+    enabled: true
+  with_fileglob:
+    - "{{ role_path }}/files/systemd/multi-user.target.wants/*.service"
+EOF
+}
+
 # Update validate_yaml function with proper bash syntax
 validate_yaml() {
     local file="$1"
@@ -650,6 +744,182 @@ cleanup_temp_files() {
     local exit_code=$?
     find /tmp -type f -name "tmp.*" -user "$(id -u)" -delete 2>/dev/null || true
     exit "$exit_code"
+}
+
+# === BEGIN REWRITE: EXPORT PHASE ===
+
+# Export system files (e.g., /etc/hosts, /etc/fstab)
+export_system_files() {
+    local system_files=(/etc/hosts /etc/fstab)
+    local dest_dir="$ROLES_DIR/system/files"
+    mkdir -p "$dest_dir"
+    for file in "${system_files[@]}"; do
+        if [ -f "$file" ]; then
+            cp "$file" "$dest_dir/$(basename "$file")"
+        fi
+    done
+}
+
+# Export SSH keys/configs for all real users
+export_ssh_files() {
+    local dest_dir="$ROLES_DIR/ssh/files"
+    mkdir -p "$dest_dir"
+    # Get all users with home directories in /home or /root
+    awk -F: '($3>=1000 && $3!=65534) || $1=="root" {print $1":"$6}' /etc/passwd | while IFS=: read -r user home; do
+        if [ -d "$home/.ssh" ]; then
+            mkdir -p "$dest_dir/$user"
+            cp -a "$home/.ssh/." "$dest_dir/$user/"
+        fi
+    done
+}
+
+# Export custom scripts from /usr/local/bin
+export_custom_scripts() {
+    local src_dir="/usr/local/bin"
+    local dest_dir="$ROLES_DIR/commands/files"
+    mkdir -p "$dest_dir"
+    find "$src_dir" -maxdepth 1 -type f -executable -exec cp {} "$dest_dir/" \;
+}
+
+# Export package lists
+export_package_lists() {
+    local dest_dir="$ROLES_DIR/packages/files"
+    mkdir -p "$dest_dir"
+    # APT packages
+    if command -v dpkg-query >/dev/null 2>&1; then
+        dpkg-query -W -f='${binary:Package}\n' > "$dest_dir/apt_packages.txt"
+    fi
+    # pip packages
+    if command -v pip >/dev/null 2>&1; then
+        pip freeze > "$dest_dir/pip_packages.txt"
+    fi
+    # npm packages
+    if command -v npm >/dev/null 2>&1; then
+        npm list -g --depth=0 | awk -F ' ' '/──/ {print $2}' > "$dest_dir/npm_packages.txt"
+    fi
+}
+
+# Export Docker Compose files (if any)
+export_docker_compose() {
+    local src_file="/opt/docker/docker-compose.yml"
+    local dest_dir="$ROLES_DIR/docker/files"
+    mkdir -p "$dest_dir"
+    if [ -f "$src_file" ]; then
+        cp "$src_file" "$dest_dir/docker-compose.yml"
+    fi
+}
+
+# Export custom systemd unit files
+export_systemd_units() {
+    local dest_dir="$ROLES_DIR/services/files/systemd"
+    mkdir -p "$dest_dir"
+    # Copy all custom unit files
+    find /etc/systemd/system/ -maxdepth 1 -type f -name '*.service' -exec cp {} "$dest_dir/" \;
+    # Copy all symlinks from multi-user.target.wants and their targets
+    local wants_dir="/etc/systemd/system/multi-user.target.wants"
+    if [ -d "$wants_dir" ]; then
+        mkdir -p "$dest_dir/multi-user.target.wants"
+        for link in "$wants_dir"/*.service; do
+            [ -e "$link" ] || continue
+            # Copy the symlink itself
+            cp -P "$link" "$dest_dir/multi-user.target.wants/"
+            # Copy the target of the symlink if it's not already in dest_dir
+            target_path=$(readlink -f "$link")
+            if [ -f "$target_path" ] && [ ! -f "$dest_dir/$(basename "$target_path")" ]; then
+                cp "$target_path" "$dest_dir/"
+            fi
+        done
+    fi
+}
+
+# Export cron configurations
+export_cron_configs() {
+    local dest_dir="$ROLES_DIR/system/files/cron"
+    mkdir -p "$dest_dir"
+    # Copy crontab, cron.d, cron.daily, etc.
+    [ -f /etc/crontab ] && cp /etc/crontab "$dest_dir/"
+    for crondir in /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.monthly /etc/cron.weekly; do
+        [ -d "$crondir" ] && cp -a "$crondir" "$dest_dir/"
+    done
+}
+
+# Export SNMP configuration
+export_snmp_configs() {
+    local dest_dir="$ROLES_DIR/system/files/snmp"
+    mkdir -p "$dest_dir"
+    [ -d /etc/snmp ] && cp -a /etc/snmp/. "$dest_dir/"
+}
+
+# Export rsync configuration
+export_rsync_configs() {
+    local dest_dir="$ROLES_DIR/system/files/rsync"
+    mkdir -p "$dest_dir"
+    [ -f /etc/rsyncd.conf ] && cp /etc/rsyncd.conf "$dest_dir/"
+    [ -f /etc/rsyncd.secrets ] && cp /etc/rsyncd.secrets "$dest_dir/"
+}
+
+# Export motd and motd scripts
+export_motd_configs() {
+    local dest_dir="$ROLES_DIR/system/files/motd"
+    mkdir -p "$dest_dir"
+    [ -f /etc/motd ] && cp /etc/motd "$dest_dir/"
+    [ -d /etc/update-motd.d ] && cp -a /etc/update-motd.d/. "$dest_dir/"
+}
+
+# Export NTP configuration
+export_ntp_configs() {
+    local dest_dir="$ROLES_DIR/system/files/ntp"
+    mkdir -p "$dest_dir"
+    [ -f /etc/ntp.conf ] && cp /etc/ntp.conf "$dest_dir/"
+    [ -d /etc/ntp ] && cp -a /etc/ntp/. "$dest_dir/"
+}
+
+# Export user dotfiles (excluding .ssh)
+export_dotfiles() {
+    local dest_base="$ROLES_DIR/dotfiles/files"
+    mkdir -p "$dest_base"
+    awk -F: '($3>=1000 && $3!=65534) || $1=="root" {print $1":"$6}' /etc/passwd | while IFS=: read -r user home; do
+        [ -d "$home" ] || continue
+        mkdir -p "$dest_base/$user"
+        find "$home" -maxdepth 1 -mindepth 1 -name ".*" ! -name ".ssh" -exec cp -a {} "$dest_base/$user/" \;
+    done
+}
+
+# Export system-wide completion files
+export_completions() {
+    local dest_etc="$ROLES_DIR/completions/files/etc_bash_completion.d"
+    local dest_usr="$ROLES_DIR/completions/files/usr_share_bash_completion_completions"
+    mkdir -p "$dest_etc" "$dest_usr"
+    [ -d /etc/bash_completion.d ] && cp -a /etc/bash_completion.d/. "$dest_etc/"
+    [ -d /usr/share/bash-completion/completions ] && cp -a /usr/share/bash-completion/completions/. "$dest_usr/"
+}
+
+# Export user account files
+export_users() {
+    local dest_dir="$ROLES_DIR/users/files"
+    mkdir -p "$dest_dir"
+    cp /etc/passwd /etc/group "$dest_dir/"
+}
+
+# === END EXPORT PHASE ===
+
+# Function to add all roles in roles directory to site.yml
+add_all_roles_to_playbook() {
+    local playbook_file="$BASE_DIR/site.yml"
+    local roles_list
+    roles_list=$(find "$ROLES_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
+    # Write playbook header
+    {
+        echo "---"
+        echo "- name: Server Configuration"
+        echo "  hosts: all"
+        echo "  become: true"
+        echo "  gather_facts: true"
+        echo "  roles:"
+        for role in $roles_list; do
+            echo "    - $role"
+        done
+    } > "$playbook_file"
 }
 
 # Main script execution
@@ -717,12 +987,50 @@ if [ "$GENERATE_CONFIG" = true ]; then
     # Generate default variables
     generate_default_vars "$BASE_DIR"
     
-    # Process selected modules
+    # Export and playbook generation phase for selected modules
     for module in "${SELECTED_MODULES[@]}"; do
         echo "Processing module: $module"
-        "process_$module"
-        add_role "$module"
+        case $module in
+            paths)
+                export_paths && process_paths && add_role paths
+                ;;
+            users)
+                export_users && process_users && add_role users
+                ;;
+            ssh)
+                export_ssh_files && process_ssh && add_role ssh
+                ;;
+            docker)
+                export_docker_compose && process_docker && add_role docker
+                ;;
+            packages)
+                export_package_lists && process_packages && add_role packages
+                ;;
+            commands)
+                export_custom_scripts && process_commands && add_role commands
+                ;;
+            services)
+                export_systemd_units && process_services_playbook && add_role services
+                ;;
+            system)
+                export_system_files && export_cron_configs && export_snmp_configs && export_rsync_configs && export_motd_configs && export_ntp_configs && process_system && add_role system
+                ;;
+            vm)
+                process_vm && add_role vm
+                ;;
+            dotfiles)
+                export_dotfiles && process_dotfiles && add_role dotfiles
+                ;;
+            completions)
+                export_completions && process_completions && add_role completions
+                ;;
+        esac
     done
+
+    # If all modules are selected, add all roles to playbook
+    if [ ${#SELECTED_MODULES[@]} -eq ${#MODULES[@]} ]; then
+        add_all_roles_to_playbook
+    fi
 
     # Create ansible.cfg
     cat > "$BASE_DIR/ansible.cfg" << EOF
