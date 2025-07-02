@@ -86,6 +86,9 @@ EOF
 create_directory_structure() {
     mkdir -p "$BASE_DIR"/{roles,group_vars,inventory}
     
+    # Get primary IP address
+    PRIMARY_IP=$(hostname -I | awk '{print $1}')
+    
     # Create main playbook
     {
         echo "---"
@@ -101,8 +104,8 @@ create_directory_structure() {
         echo "---"
         echo "all:"
         echo "  hosts:"
-        echo "    localhost:"
-        echo "      ansible_connection: local"
+        echo "    $PRIMARY_IP:"
+        echo "      ansible_connection: ssh"
         echo "      ansible_python_interpreter: /usr/bin/python3"
     } > "$BASE_DIR/inventory/hosts"
 }

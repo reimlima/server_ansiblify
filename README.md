@@ -195,6 +195,14 @@ server_config/
         └── vars
 ```
 
+## Run Playbook
+
+Here's how to run the generated playbook
+```sh
+ansible-playbook -i server_config/inventory/hosts server_config/site.yml
+```
+> :warning: Make shure the inventory file is pointing toi the right server
+
 ## Requirements
 
 - Bash
