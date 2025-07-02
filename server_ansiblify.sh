@@ -751,6 +751,14 @@ cleanup_temp_files() {
 
 # === BEGIN REWRITE: EXPORT PHASE ===
 
+# Export custom paths configuration
+export_paths() {
+    local dest_dir="$ROLES_DIR/paths/files"
+    mkdir -p "$dest_dir"
+    # The paths module discovers custom paths dynamically, so no files to export
+    # This function just ensures the directory structure exists
+}
+
 # Export system files (e.g., /etc/hosts, /etc/fstab)
 export_system_files() {
     local system_files=(/etc/hosts /etc/fstab)

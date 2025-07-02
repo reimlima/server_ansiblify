@@ -90,17 +90,23 @@ A Bash script to automatically generate a complete, portable Ansible playbook th
 
 ### Generate Playbook
 ```bash
-sudo bash server_ansiblify.sh --all
 Processing module: vm
 Processing module: system
+  Exporting system files...
+  Exporting cron configurations...
+  Exporting SNMP configurations...
+  Exporting rsync configurations...
+  Exporting MOTD configurations...
+  Exporting NTP configurations...
+  Warning: Some exports failed: rsync_configs ntp_configs
 Processing module: commands
 Processing module: users
 Processing module: ssh
 Processing module: docker
 Processing module: packages
 Processing module: services
+  Exporting systemd units...
 Processing module: paths
-server_ansiblify.sh: line 995: export_paths: command not found
 Ansible playbook structure generated in server_config/
 To test the playbook without making changes, run:
   server_ansiblify.sh --dry-run
